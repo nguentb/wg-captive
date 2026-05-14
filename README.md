@@ -45,8 +45,8 @@ Designed for:
 
 ```bash
 CONTAINER=wg-easy \
-DNS_IP=172.17.0.1 \
-PORTAL_IP=2.26.96.22 \
+DNS_IP=x.x.x.x \
+PORTAL_IP=x.x.x.x \
 bash <(curl -Ls https://raw.githubusercontent.com/nguentb/wg-captive/refs/heads/main/install.sh)
 ```
 Install with Telegram backup
