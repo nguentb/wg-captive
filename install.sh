@@ -151,15 +151,26 @@ status_rules() {
 }
 
 backup_ips() {
+
   DATE="$(date +%Y-%m-%d_%H-%M-%S)"
+
+  HOSTNAME_NOW="$(hostname)"
+
+  PUBLIC_IP="$(curl -4 -s https://api.ipify.org || echo unknown)"
+
   BACKUP_FILE="$BACKUP_DIR/blocked-ips-$DATE.txt"
 
   cp "$BLOCKED_FILE" "$BACKUP_FILE"
 
   COUNT="$(grep -v '^#' "$BLOCKED_FILE" | grep -v '^$' | wc -l)"
 
+  echo "Backup created:"
+  echo "$BACKUP_FILE"
+
+  echo "Blocked IPs:"
+  echo "$COUNT"
+
   if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
-    echo "Backup saved: $BACKUP_FILE"
     echo "Telegram not configured"
     exit 0
   fi
@@ -168,9 +179,15 @@ backup_ips() {
     "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" \
     -F chat_id="$TG_CHAT_ID" \
     -F document=@"$BACKUP_FILE" \
-    -F caption="WG Captive backup - $DATE - blocked IPs: $COUNT" >/dev/null
+    -F caption="WG Captive Backup
 
-  echo "Backup sent to Telegram: $BACKUP_FILE"
+Host: $HOSTNAME_NOW
+Server IP: $PUBLIC_IP
+Time: $DATE
+Blocked IPs: $COUNT" >/dev/null
+
+  echo "Backup sent to Telegram:"
+  echo "$BACKUP_FILE"
 }
 
 restore_ips() {
