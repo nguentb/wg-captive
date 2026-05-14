@@ -161,7 +161,13 @@ backup_ips() {
   BACKUP_FILE="$BACKUP_DIR/blocked-ips-$DATE.txt"
 
   cp "$BLOCKED_FILE" "$BACKUP_FILE"
-
+  
+  find "$BACKUP_DIR" \
+    -type f \
+    -name "blocked-ips-*.txt" \
+    -mtime +14 \
+    -delete
+    
   COUNT="$(grep -v '^#' "$BLOCKED_FILE" | grep -v '^$' | wc -l)"
 
   echo "Backup created:"
