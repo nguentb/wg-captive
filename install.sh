@@ -27,12 +27,10 @@ if [ -z "$PORTAL_IP" ]; then
 fi
 
 apt update
-apt install -y curl dnsmasq dnsutils ipset
+apt install -y curl dnsmasq dnsutils
 
 mkdir -p "$INSTALL_DIR"
 mkdir -p /etc/dnsmasq.d
-
-ipset create walled_garden hash:ip timeout 86400 -exist
 
 cat > "$DNSMASQ_CONF" <<EOF
 listen-address=$DNS_IP
@@ -51,15 +49,6 @@ address=/msftconnecttest.com/$PORTAL_IP
 address=/www.msftconnecttest.com/$PORTAL_IP
 
 address=/detectportal.firefox.com/$PORTAL_IP
-
-ipset=/wa.me/walled_garden
-ipset=/api.whatsapp.com/walled_garden
-ipset=/whatsapp.com/walled_garden
-ipset=/whatsapp.net/walled_garden
-
-ipset=/zalo.me/walled_garden
-ipset=/zaloapp.com/walled_garden
-ipset=/zaloapp.com.vn/walled_garden
 EOF
 
 systemctl enable dnsmasq
@@ -91,6 +80,8 @@ TG_BOT_TOKEN="${TG_BOT_TOKEN:-}"
 TG_CHAT_ID="${TG_CHAT_ID:-}"
 DNSMASQ_CONF="${DNSMASQ_CONF:-/etc/dnsmasq.d/wg-captive.conf}"
 
+WALLED_DOMAINS="wa.me api.whatsapp.com whatsapp.com whatsapp.net zalo.me zaloapp.com zaloapp.com.vn"
+
 mkdir -p "$INSTALL_DIR" "$BACKUP_DIR"
 touch "$BLOCKED_FILE"
 
@@ -98,22 +89,13 @@ run_ct() {
   docker exec "$CONTAINER" sh -c "$1"
 }
 
-ensure_walled_garden() {
-  ipset create walled_garden hash:ip timeout 86400 -exist
-
-  dig @"$DNS_IP" wa.me >/dev/null 2>&1 || true
-  dig @"$DNS_IP" api.whatsapp.com >/dev/null 2>&1 || true
-  dig @"$DNS_IP" whatsapp.com >/dev/null 2>&1 || true
-  dig @"$DNS_IP" whatsapp.net >/dev/null 2>&1 || true
-
-  dig @"$DNS_IP" zalo.me >/dev/null 2>&1 || true
-  dig @"$DNS_IP" zaloapp.com >/dev/null 2>&1 || true
-  dig @"$DNS_IP" zaloapp.com.vn >/dev/null 2>&1 || true
+resolve_walled_ips() {
+  for D in $WALLED_DOMAINS; do
+    dig +short A "$D" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || true
+  done | sort -u
 }
 
 init_chain() {
-  ensure_walled_garden
-
   run_ct "iptables -N WG_EXPIRED 2>/dev/null || true"
   run_ct "iptables -C FORWARD -j WG_EXPIRED 2>/dev/null || iptables -I FORWARD -j WG_EXPIRED"
 }
@@ -134,13 +116,17 @@ done
 apply_one() {
   IP="$1"
 
+  WG_IPS="$(resolve_walled_ips | tr '\n' ' ')"
+
   run_ct "
 iptables -A WG_EXPIRED -s $IP -d $DNS_IP -p udp --dport 53 -j ACCEPT
 iptables -A WG_EXPIRED -s $IP -d $DNS_IP -p tcp --dport 53 -j ACCEPT
 
 iptables -A WG_EXPIRED -s $IP -d $PORTAL_IP -j ACCEPT
 
-iptables -A WG_EXPIRED -s $IP -m set --match-set walled_garden dst -j ACCEPT
+for DIP in $WG_IPS; do
+  iptables -A WG_EXPIRED -s $IP -d \$DIP -j ACCEPT
+done
 
 iptables -A WG_EXPIRED -s $IP -p tcp --dport 853 -j REJECT
 iptables -A WG_EXPIRED -s $IP -p udp --dport 853 -j REJECT
@@ -217,8 +203,12 @@ status_rules() {
   docker exec "$CONTAINER" iptables -t nat -S PREROUTING | grep WG_CAPTIVE || true
 
   echo
-  echo "=== Walled Garden IPSet ==="
-  ipset list walled_garden 2>/dev/null || true
+  echo "=== Walled Garden Domains ==="
+  echo "$WALLED_DOMAINS"
+
+  echo
+  echo "=== Resolved Walled Garden IPs ==="
+  resolve_walled_ips || true
 }
 
 backup_ips() {
@@ -280,13 +270,11 @@ restore_ips() {
   echo "Restored from: $RESTORE_FILE"
 }
 
-refresh_walled_garden() {
-  ensure_walled_garden
-  systemctl restart dnsmasq
-  ensure_walled_garden
-
-  echo "Walled garden refreshed"
-  ipset list walled_garden
+refresh_walled() {
+  clear_rules
+  apply_all
+  echo "Walled garden IPs refreshed"
+  resolve_walled_ips
 }
 
 uninstall_self() {
@@ -296,18 +284,20 @@ uninstall_self() {
 
   systemctl disable --now wg-captive.service 2>/dev/null || true
   systemctl disable --now wg-captive-backup.timer 2>/dev/null || true
+  systemctl disable --now wg-captive-walled.timer 2>/dev/null || true
   systemctl stop wg-captive-backup.service 2>/dev/null || true
+  systemctl stop wg-captive-walled.service 2>/dev/null || true
 
   rm -f /etc/systemd/system/wg-captive.service
   rm -f /etc/systemd/system/wg-captive-backup.service
   rm -f /etc/systemd/system/wg-captive-backup.timer
+  rm -f /etc/systemd/system/wg-captive-walled.service
+  rm -f /etc/systemd/system/wg-captive-walled.timer
 
   systemctl daemon-reload
 
   rm -f "$DNSMASQ_CONF"
   systemctl restart dnsmasq 2>/dev/null || true
-
-  ipset destroy walled_garden 2>/dev/null || true
 
   rm -f /usr/local/bin/wg-captive
   rm -rf /opt/wg-captive
@@ -352,7 +342,7 @@ case "$1" in
     ;;
 
   refresh-walled)
-    refresh_walled_garden
+    refresh_walled
     ;;
 
   uninstall)
@@ -416,18 +406,21 @@ EOF
 
 cat > /etc/systemd/system/wg-captive-walled.service <<EOF
 [Unit]
-Description=Refresh WG Captive Walled Garden IPSet
-After=dnsmasq.service
-Requires=dnsmasq.service
+Description=Refresh WG Captive Walled Garden IP Rules
+After=docker.service dnsmasq.service
+Requires=docker.service dnsmasq.service
 
 [Service]
 Type=oneshot
 ExecStart=$BIN refresh-walled
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
 cat > /etc/systemd/system/wg-captive-walled.timer <<EOF
 [Unit]
-Description=Refresh WG Captive Walled Garden IPSet
+Description=Refresh WG Captive Walled Garden IP Rules
 
 [Timer]
 OnBootSec=2min
