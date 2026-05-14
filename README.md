@@ -76,7 +76,9 @@ Show iptables status
 wg-captive status
 ```
 Re-apply all rules
-```wg-captive apply```
+```
+wg-captive apply
+```
 
 Useful after:
 
@@ -106,12 +108,16 @@ systemctl status wg-captive-backup.timer
 Restore
 
 Restore blocked IP list from backup:
-```wg-captive restore /opt/wg-captive/backups/blocked-ips-2026-05-14_03-00-00.txt```
+```
+wg-captive restore /opt/wg-captive/backups/blocked-ips-2026-05-14_03-00-00.txt
+```
 Uninstall
 
 Remove everything completely:
 
-```wg-captive uninstall```
+```
+wg-captive uninstall
+```
 
 This removes:
 
