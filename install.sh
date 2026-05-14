@@ -5,8 +5,25 @@ INSTALL_DIR="/opt/wg-captive"
 BIN="/usr/local/bin/wg-captive"
 
 CONTAINER="${CONTAINER:-wg-easy}"
-DNS_IP="${DNS_IP:-172.17.0.1}"
-PORTAL_IP="${PORTAL_IP:-2.26.96.22}"
+DNS_IP="${DNS_IP:-}"
+PORTAL_IP="${PORTAL_IP:-}"
+
+TG_BOT_TOKEN="${TG_BOT_TOKEN:-}"
+TG_CHAT_ID="${TG_CHAT_ID:-}"
+
+if [ -z "$DNS_IP" ]; then
+  echo "ERROR: DNS_IP is required"
+  echo "Example:"
+  echo "DNS_IP=172.17.0.1 PORTAL_IP=2.26.96.22 bash <(curl -Ls ...)"
+  exit 1
+fi
+
+if [ -z "$PORTAL_IP" ]; then
+  echo "ERROR: PORTAL_IP is required"
+  echo "Example:"
+  echo "DNS_IP=172.17.0.1 PORTAL_IP=2.26.96.22 bash <(curl -Ls ...)"
+  exit 1
+fi
 
 mkdir -p "$INSTALL_DIR"
 
@@ -14,6 +31,8 @@ cat > "$INSTALL_DIR/config" <<EOF
 CONTAINER="$CONTAINER"
 DNS_IP="$DNS_IP"
 PORTAL_IP="$PORTAL_IP"
+TG_BOT_TOKEN="$TG_BOT_TOKEN"
+TG_CHAT_ID="$TG_CHAT_ID"
 EOF
 
 cat > "$BIN" <<'EOF'
@@ -22,14 +41,17 @@ set -e
 
 INSTALL_DIR="/opt/wg-captive"
 BLOCKED_FILE="$INSTALL_DIR/blocked-ips.txt"
+BACKUP_DIR="$INSTALL_DIR/backups"
 
 [ -f "$INSTALL_DIR/config" ] && source "$INSTALL_DIR/config"
 
 CONTAINER="${CONTAINER:-wg-easy}"
-DNS_IP="${DNS_IP:-172.17.0.1}"
-PORTAL_IP="${PORTAL_IP:-2.26.96.22}"
+DNS_IP="${DNS_IP:-}"
+PORTAL_IP="${PORTAL_IP:-}"
+TG_BOT_TOKEN="${TG_BOT_TOKEN:-}"
+TG_CHAT_ID="${TG_CHAT_ID:-}"
 
-mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR" "$BACKUP_DIR"
 touch "$BLOCKED_FILE"
 
 run_ct() {
@@ -42,11 +64,17 @@ init_chain() {
 }
 
 clear_rules() {
-  run_ct "while iptables -D FORWARD -j WG_EXPIRED 2>/dev/null; do :; done"
+  while run_ct "iptables -D FORWARD -j WG_EXPIRED" 2>/dev/null; do :; done
+
   run_ct "iptables -F WG_EXPIRED 2>/dev/null || true"
   run_ct "iptables -X WG_EXPIRED 2>/dev/null || true"
 
-  run_ct "iptables -t nat -S PREROUTING | grep 'WG_CAPTIVE' | sed 's/^-A/iptables -t nat -D/' | sh 2>/dev/null || true"
+  run_ct "
+iptables -t nat -S PREROUTING |
+grep WG_CAPTIVE |
+sed 's/^-A/iptables -t nat -D/' |
+sh 2>/dev/null || true
+"
 }
 
 apply_one() {
@@ -122,28 +150,111 @@ status_rules() {
   docker exec "$CONTAINER" iptables -t nat -S PREROUTING | grep WG_CAPTIVE || true
 }
 
+backup_ips() {
+  DATE="$(date +%Y-%m-%d_%H-%M-%S)"
+  BACKUP_FILE="$BACKUP_DIR/blocked-ips-$DATE.txt"
+
+  cp "$BLOCKED_FILE" "$BACKUP_FILE"
+
+  COUNT="$(grep -v '^#' "$BLOCKED_FILE" | grep -v '^$' | wc -l)"
+
+  if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+    echo "Backup saved: $BACKUP_FILE"
+    echo "Telegram not configured"
+    exit 0
+  fi
+
+  curl -s -X POST \
+    "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" \
+    -F chat_id="$TG_CHAT_ID" \
+    -F document=@"$BACKUP_FILE" \
+    -F caption="WG Captive backup - $DATE - blocked IPs: $COUNT" >/dev/null
+
+  echo "Backup sent to Telegram: $BACKUP_FILE"
+}
+
+restore_ips() {
+  RESTORE_FILE="$1"
+
+  if [ -z "$RESTORE_FILE" ]; then
+    echo "Usage: wg-captive restore <backup-file>"
+    exit 1
+  fi
+
+  if [ ! -f "$RESTORE_FILE" ]; then
+    echo "File not found: $RESTORE_FILE"
+    exit 1
+  fi
+
+  cp "$RESTORE_FILE" "$BLOCKED_FILE"
+
+  clear_rules
+  apply_all
+
+  echo "Restored from: $RESTORE_FILE"
+}
+
+uninstall_self() {
+  echo "Removing wg-captive..."
+
+  clear_rules || true
+
+  systemctl disable --now wg-captive.service 2>/dev/null || true
+  systemctl disable --now wg-captive-backup.timer 2>/dev/null || true
+  systemctl stop wg-captive-backup.service 2>/dev/null || true
+
+  rm -f /etc/systemd/system/wg-captive.service
+  rm -f /etc/systemd/system/wg-captive-backup.service
+  rm -f /etc/systemd/system/wg-captive-backup.timer
+
+  systemctl daemon-reload
+
+  rm -f /usr/local/bin/wg-captive
+  rm -rf /opt/wg-captive
+
+  echo "wg-captive removed completely"
+}
+
 case "$1" in
   block)
     block_ip "$2"
     ;;
+
   unblock)
     unblock_ip "$2"
     ;;
+
   list)
     list_ips
     ;;
+
   apply)
     clear_rules
     apply_all
     echo "Rules applied"
     ;;
+
   clear)
     clear_rules
     echo "Rules cleared"
     ;;
+
   status)
     status_rules
     ;;
+
+  backup)
+    backup_ips
+    ;;
+
+  restore)
+    restore_ips "$2"
+    ;;
+
+  uninstall)
+    uninstall_self
+    ;;
+
   *)
     echo "Usage:"
     echo "  wg-captive block <ip>"
@@ -152,6 +263,9 @@ case "$1" in
     echo "  wg-captive apply"
     echo "  wg-captive clear"
     echo "  wg-captive status"
+    echo "  wg-captive backup"
+    echo "  wg-captive restore <file>"
+    echo "  wg-captive uninstall"
     exit 1
     ;;
 esac
@@ -162,7 +276,7 @@ touch "$INSTALL_DIR/blocked-ips.txt"
 
 cat > /etc/systemd/system/wg-captive.service <<EOF
 [Unit]
-Description=Restore WG Captive Portal Rules
+Description=Restore WG Captive Rules
 After=docker.service
 Requires=docker.service
 
@@ -174,9 +288,33 @@ ExecStart=$BIN apply
 WantedBy=multi-user.target
 EOF
 
+cat > /etc/systemd/system/wg-captive-backup.service <<EOF
+[Unit]
+Description=Backup WG Captive blocked IPs
+
+[Service]
+Type=oneshot
+ExecStart=$BIN backup
+EOF
+
+cat > /etc/systemd/system/wg-captive-backup.timer <<EOF
+[Unit]
+Description=Daily WG Captive Backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl daemon-reload
 systemctl enable wg-captive.service
+systemctl enable wg-captive-backup.timer
+systemctl start wg-captive-backup.timer
 
+echo
 echo "Installed wg-captive"
 echo
 echo "Config:"
@@ -190,3 +328,7 @@ echo "  wg-captive unblock 10.8.0.2"
 echo "  wg-captive list"
 echo "  wg-captive status"
 echo "  wg-captive apply"
+echo "  wg-captive clear"
+echo "  wg-captive backup"
+echo "  wg-captive restore <file>"
+echo "  wg-captive uninstall"
