@@ -14,14 +14,14 @@ TG_CHAT_ID="${TG_CHAT_ID:-}"
 if [ -z "$DNS_IP" ]; then
   echo "ERROR: DNS_IP is required"
   echo "Example:"
-  echo "DNS_IP=172.17.0.1 PORTAL_IP=2.26.96.22 bash <(curl -Ls ...)"
+  echo "CONTAINER=wg-easy DNS_IP=172.17.0.1 PORTAL_IP=2.26.96.22 bash <(curl -Ls ...)"
   exit 1
 fi
 
 if [ -z "$PORTAL_IP" ]; then
   echo "ERROR: PORTAL_IP is required"
   echo "Example:"
-  echo "DNS_IP=172.17.0.1 PORTAL_IP=2.26.96.22 bash <(curl -Ls ...)"
+  echo "CONTAINER=wg-easy DNS_IP=172.17.0.1 PORTAL_IP=2.26.96.22 bash <(curl -Ls ...)"
   exit 1
 fi
 
@@ -64,16 +64,15 @@ init_chain() {
 }
 
 clear_rules() {
-  while run_ct "iptables -D FORWARD -j WG_EXPIRED" 2>/dev/null; do :; done
-
+  run_ct "while iptables -D FORWARD -j WG_EXPIRED 2>/dev/null; do :; done"
   run_ct "iptables -F WG_EXPIRED 2>/dev/null || true"
   run_ct "iptables -X WG_EXPIRED 2>/dev/null || true"
 
   run_ct "
-iptables -t nat -S PREROUTING |
-grep WG_CAPTIVE |
-sed 's/^-A/iptables -t nat -D/' |
-sh 2>/dev/null || true
+while iptables -t nat -S PREROUTING | grep -q 'WG_CAPTIVE'; do
+  RULE=\$(iptables -t nat -S PREROUTING | grep 'WG_CAPTIVE' | head -n1 | sed 's/^-A PREROUTING/-D PREROUTING/')
+  iptables -t nat \$RULE
+done
 "
 }
 
@@ -83,9 +82,12 @@ apply_one() {
   run_ct "
 iptables -A WG_EXPIRED -s $IP -d $DNS_IP -p udp --dport 53 -j ACCEPT
 iptables -A WG_EXPIRED -s $IP -d $DNS_IP -p tcp --dport 53 -j ACCEPT
+
 iptables -A WG_EXPIRED -s $IP -d $PORTAL_IP -j ACCEPT
+
 iptables -A WG_EXPIRED -s $IP -p tcp --dport 853 -j REJECT
 iptables -A WG_EXPIRED -s $IP -p udp --dport 853 -j REJECT
+
 iptables -A WG_EXPIRED -s $IP -j REJECT
 
 iptables -t nat -A PREROUTING -s $IP -p udp --dport 53 -m comment --comment WG_CAPTIVE -j DNAT --to-destination $DNS_IP:53
@@ -151,30 +153,23 @@ status_rules() {
 }
 
 backup_ips() {
-
   DATE="$(date +%Y-%m-%d_%H-%M-%S)"
-
   HOSTNAME_NOW="$(hostname)"
-
   PUBLIC_IP="$(curl -4 -s https://api.ipify.org || echo unknown)"
-
   BACKUP_FILE="$BACKUP_DIR/blocked-ips-$DATE.txt"
 
   cp "$BLOCKED_FILE" "$BACKUP_FILE"
-  
+
   find "$BACKUP_DIR" \
     -type f \
     -name "blocked-ips-*.txt" \
     -mtime +14 \
     -delete
-    
+
   COUNT="$(grep -v '^#' "$BLOCKED_FILE" | grep -v '^$' | wc -l)"
 
-  echo "Backup created:"
-  echo "$BACKUP_FILE"
-
-  echo "Blocked IPs:"
-  echo "$COUNT"
+  echo "Backup created: $BACKUP_FILE"
+  echo "Blocked IPs: $COUNT"
 
   if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
     echo "Telegram not configured"
@@ -192,8 +187,7 @@ Server IP: $PUBLIC_IP
 Time: $DATE
 Blocked IPs: $COUNT" >/dev/null
 
-  echo "Backup sent to Telegram:"
-  echo "$BACKUP_FILE"
+  echo "Backup sent to Telegram: $BACKUP_FILE"
 }
 
 restore_ips() {
