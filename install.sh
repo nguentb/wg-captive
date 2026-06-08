@@ -153,41 +153,54 @@ status_rules() {
 }
 
 backup_ips() {
+
   DATE="$(date +%Y-%m-%d_%H-%M-%S)"
   HOSTNAME_NOW="$(hostname)"
   PUBLIC_IP="$(curl -4 -s https://api.ipify.org || echo unknown)"
-  BACKUP_FILE="$BACKUP_DIR/blocked-ips-$DATE.txt"
 
-  cp "$BLOCKED_FILE" "$BACKUP_FILE"
+  TMP_DIR="/tmp/wg-captive-$DATE"
+
+  mkdir -p "$TMP_DIR"
+
+  cp "$BLOCKED_FILE" "$TMP_DIR/blocked-ips.txt"
+
+  docker exec "$CONTAINER" cat /etc/wireguard/wg0.conf \
+      > "$TMP_DIR/wg0.conf"
+
+  cat > "$TMP_DIR/metadata.txt" <<EOF
+Host: $HOSTNAME_NOW
+Public IP: $PUBLIC_IP
+Date: $DATE
+EOF
+
+  ARCHIVE="$BACKUP_DIR/wg-captive-backup-$DATE.tar.gz"
+
+  tar -czf "$ARCHIVE" -C "$TMP_DIR" .
+
+  rm -rf "$TMP_DIR"
 
   find "$BACKUP_DIR" \
-    -type f \
-    -name "blocked-ips-*.txt" \
-    -mtime +14 \
-    -delete
+      -type f \
+      -name "*.tar.gz" \
+      -mtime +14 \
+      -delete
 
-  COUNT="$(grep -v '^#' "$BLOCKED_FILE" | grep -v '^$' | wc -l)"
+  if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
 
-  echo "Backup created: $BACKUP_FILE"
-  echo "Blocked IPs: $COUNT"
-
-  if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
-    echo "Telegram not configured"
-    exit 0
-  fi
-
-  curl -s -X POST \
-    "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" \
-    -F chat_id="$TG_CHAT_ID" \
-    -F document=@"$BACKUP_FILE" \
-    -F caption="WG Captive Backup
+      curl -s \
+        -X POST \
+        "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" \
+        -F chat_id="$TG_CHAT_ID" \
+        -F document=@"$ARCHIVE" \
+        -F caption="WG Captive Backup
 
 Host: $HOSTNAME_NOW
 Server IP: $PUBLIC_IP
-Time: $DATE
-Blocked IPs: $COUNT" >/dev/null
+Date: $DATE"
 
-  echo "Backup sent to Telegram: $BACKUP_FILE"
+  fi
+
+  echo "Backup created: $ARCHIVE"
 }
 
 restore_ips() {
