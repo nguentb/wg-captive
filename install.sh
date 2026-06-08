@@ -153,54 +153,51 @@ status_rules() {
 }
 
 backup_ips() {
-
   DATE="$(date +%Y-%m-%d_%H-%M-%S)"
   HOSTNAME_NOW="$(hostname)"
   PUBLIC_IP="$(curl -4 -s https://api.ipify.org || echo unknown)"
-
-  TMP_DIR="/tmp/wg-captive-$DATE"
+  TMP_DIR="/tmp/wg-captive-backup-$DATE"
+  ARCHIVE="$BACKUP_DIR/wg-captive-backup-$DATE.tar.gz"
 
   mkdir -p "$TMP_DIR"
 
   cp "$BLOCKED_FILE" "$TMP_DIR/blocked-ips.txt"
 
-  docker exec "$CONTAINER" cat /etc/wireguard/wg0.conf \
-      > "$TMP_DIR/wg0.conf"
+  docker exec "$CONTAINER" cat /etc/wireguard/wg0.conf > "$TMP_DIR/wg0.conf" 2>/dev/null || true
 
-  cat > "$TMP_DIR/metadata.txt" <<EOF
-Host: $HOSTNAME_NOW
-Public IP: $PUBLIC_IP
-Date: $DATE
-EOF
+  COUNT="$(grep -v '^#' "$BLOCKED_FILE" | grep -v '^$' | wc -l)"
 
-  ARCHIVE="$BACKUP_DIR/wg-captive-backup-$DATE.tar.gz"
+  {
+    echo "Host: $HOSTNAME_NOW"
+    echo "Public IP: $PUBLIC_IP"
+    echo "Date: $DATE"
+    echo "Blocked IPs: $COUNT"
+  } > "$TMP_DIR/metadata.txt"
 
   tar -czf "$ARCHIVE" -C "$TMP_DIR" .
 
   rm -rf "$TMP_DIR"
 
-  find "$BACKUP_DIR" \
-      -type f \
-      -name "*.tar.gz" \
-      -mtime +14 \
-      -delete
+  find "$BACKUP_DIR" -type f -name "wg-captive-backup-*.tar.gz" -mtime +14 -delete
 
-  if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+  if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+    echo "Backup created: $ARCHIVE"
+    echo "Telegram not configured"
+    exit 0
+  fi
 
-      curl -s \
-        -X POST \
-        "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" \
-        -F chat_id="$TG_CHAT_ID" \
-        -F document=@"$ARCHIVE" \
-        -F caption="WG Captive Backup
+  curl -s -X POST \
+    "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument" \
+    -F chat_id="$TG_CHAT_ID" \
+    -F document=@"$ARCHIVE" \
+    -F caption="WG Captive Backup
 
 Host: $HOSTNAME_NOW
 Server IP: $PUBLIC_IP
-Date: $DATE"
+Time: $DATE
+Blocked IPs: $COUNT" >/dev/null
 
-  fi
-
-  echo "Backup created: $ARCHIVE"
+  echo "Backup sent to Telegram: $ARCHIVE"
 }
 
 restore_ips() {
