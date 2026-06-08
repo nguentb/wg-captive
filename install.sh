@@ -201,24 +201,74 @@ Blocked IPs: $COUNT" >/dev/null
 }
 
 restore_ips() {
-  RESTORE_FILE="$1"
 
-  if [ -z "$RESTORE_FILE" ]; then
-    echo "Usage: wg-captive restore <backup-file>"
+  mkdir -p "$BACKUP_DIR"
+
+  mapfile -t BACKUPS < <(
+    find "$BACKUP_DIR" \
+      -maxdepth 1 \
+      -type f \
+      -name "*.tar.gz" \
+      | sort -r
+  )
+
+  if [ "${#BACKUPS[@]}" -eq 0 ]; then
+    echo "No backups found in:"
+    echo "$BACKUP_DIR"
     exit 1
   fi
 
-  if [ ! -f "$RESTORE_FILE" ]; then
-    echo "File not found: $RESTORE_FILE"
+  echo
+  echo "Available backups:"
+  echo
+
+  for i in "${!BACKUPS[@]}"; do
+    FILE="$(basename "${BACKUPS[$i]}")"
+    printf "%2d) %s\n" "$((i+1))" "$FILE"
+  done
+
+  echo
+  read -p "Select backup number: " CHOICE
+
+  if ! [[ "$CHOICE" =~ ^[0-9]+$ ]]; then
+    echo "Invalid selection"
     exit 1
   fi
 
-  cp "$RESTORE_FILE" "$BLOCKED_FILE"
+  INDEX=$((CHOICE-1))
+
+  if [ "$INDEX" -lt 0 ] || [ "$INDEX" -ge "${#BACKUPS[@]}" ]; then
+    echo "Invalid selection"
+    exit 1
+  fi
+
+  RESTORE_FILE="${BACKUPS[$INDEX]}"
+
+  echo
+  echo "Selected:"
+  echo "$(basename "$RESTORE_FILE")"
+  echo
+
+  TMP_DIR="$(mktemp -d)"
+
+  tar -xzf "$RESTORE_FILE" -C "$TMP_DIR"
+
+  if [ ! -f "$TMP_DIR/blocked-ips.txt" ]; then
+    echo "blocked-ips.txt not found in backup"
+    rm -rf "$TMP_DIR"
+    exit 1
+  fi
+
+  cp "$TMP_DIR/blocked-ips.txt" "$BLOCKED_FILE"
+
+  rm -rf "$TMP_DIR"
 
   clear_rules
   apply_all
 
-  echo "Restored from: $RESTORE_FILE"
+  echo
+  echo "Restore completed"
+  echo "Source: $(basename "$RESTORE_FILE")"
 }
 
 uninstall_self() {
