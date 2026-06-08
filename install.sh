@@ -163,7 +163,7 @@ backup_ips() {
 
   cp "$BLOCKED_FILE" "$TMP_DIR/blocked-ips.txt"
 
-  docker exec "$CONTAINER" cat /etc/wireguard/wg0.conf > "$TMP_DIR/wg0.conf" 2>/dev/null || true
+  docker exec "$CONTAINER" cat /etc/wireguard/wg0.json > "$TMP_DIR/wg0.json" 2>/dev/null || true
 
   COUNT="$(grep -v '^#' "$BLOCKED_FILE" | grep -v '^$' | wc -l)"
 
