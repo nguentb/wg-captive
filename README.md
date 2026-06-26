@@ -109,7 +109,10 @@ Restore
 
 Restore blocked IP list from backup:
 ```
-wg-captive restore /opt/wg-captive/backups/blocked-ips-2026-05-14_03-00-00.txt
+/opt/wg-captive/backups
+```
+use
+wg-captive restore
 ```
 Uninstall
 
