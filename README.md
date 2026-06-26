@@ -112,6 +112,7 @@ Restore blocked IP list from backup:
 /opt/wg-captive/backups
 ```
 use
+```
 wg-captive restore
 ```
 Uninstall
